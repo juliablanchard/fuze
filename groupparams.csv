@@ -1,0 +1,7 @@
+Group,Type,w0,wmat,wmax,beta ,sigma,A,gamma,K,mu0,zspre,zsexp,minselsize,maxselsize,fmort
+Phytoplankton,ResourceSpectrum,1.00E-12,6.00E-06,1.00E-05,NA,NA,NA,NA,0.2,NA,NA,NA,NA,NA,NA
+Zooplankton,PredatorSpectrum,1.00E-06,6.00E+00,10,2,1,0.5,0.8,0.2,0.2,0.2,0.3,10,1000,0.1
+SmallFish,PredatorSpectrum,1.00E-03,6.00E+03,10000,2,1,0.5,0.8,0.2,0.2,0.2,0.3,10,1000,0.1
+LargeFish,PredatorSpectrum,1.00E-03,6.00E+04,100000,2,1,0.5,0.8,0.2,0.2,0.2,0.3,10,1000,0.1
+Whales,PredatorSpectrum,1.00E+04,6.00E+04,1000000,6,1,0.5,0.8,0.1,0.2,0.2,0.3,NA,NA,NA
+Seabirds,PredatorSpectrum,1.00E+02,3.00E+02,500,2,1,0.5,0.8,0.1,0.2,0.2,0.3,NA,NA,NA

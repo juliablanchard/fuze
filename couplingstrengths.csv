@@ -1,0 +1,7 @@
+,Phytoplankton,Zooplankton,SmallFish,LargeFish,Whales,Seabirds
+Phytoplankton,0,1,1,1,1,0
+Zooplankton,0,1,1,1,1,1
+SmallFish,0,0,1,1,1,1
+LargeFish,0,0,1,1,1,1
+Whales,0,0,0,0,0,0
+Seabirds,0,0,0,0,0,0

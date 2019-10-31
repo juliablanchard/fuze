@@ -1,0 +1,952 @@
+param$groups[grep("PredatorSpectrum",param$groups$Type),"A"]
+param$groups[grep("PredatorSpectrum",param$groups$Type),"gamma"]
+A=param$groups[grep("PredatorSpectrum",param$groups$Type),"A"]
+SearchVol
+SearchVol[] <- unlist(tapply(wFull,1:ngrid,function(wx,A,gamma) A*wx^gamma,gamma=param$groups[grep("PredatorSpectrum",param$groups$Type),"gamma"],A=param$groups[grep("PredatorSpectrum",param$groups$Type),"A"]))
+SearchVol[] <- unlist(tapply(wFull,1:ngrid,function(wx,A,gamma) A*wx^gamma,gamma=param$groups[grep("Spectrum",param$groups$Type),"gamma"],A=param$groups[grep("Spectrum",param$groups$Type),"A"]))
+nss
+Param <- function(fileGroups="groupparams.csv",fileCoupling="couplingstrengths.csv",ENVinput=NA){#
+  # Read in functional group parameters from file:#
+  groups = read.csv(fileGroups)#
+  strengths = read.csv(fileCoupling)#
+  row.names(strengths) <- strengths[,1]#
+  #drivers = read.csv(ENVinput)#
+  # Set up parameter list#
+  param=list( #
+            # Model Structure:#
+              groups = groups,                                # functional group parameters#
+              theta  = strengths[-1],                         # coupling strengths, or interaction matrix for groups#
+            # Grid Structure:#
+              nss     = length(grep("Spectrum",groups$Type)), # Number of size spectrum groups#
+              nbio    = length(grep("Pool",groups$Type)),     # Number of unstructured biomass pool groups#
+              ngrid   = 100,                                  # No. of size classes          #
+              tmax    = 100,                                  # no. years#
+              dt      = 0.1,                                  # time step#
+              isave   = 1,                                    # how often to save results#
+              w0      = 0.001,                                # mass of eggs i.e. minimum size in g#
+              wMax    = 10^6,                                # max weight in grid#
+            # Resource Spectrum input (power law scaling of number versus body mass, kap is prefactor, lambda is exponent)#
+             kap = 0.1,#
+             lambda = -2    #
+            # Temperature dependence - same across all groups for the time being:#
+              # c1=25.22,                                       # constant used in Jennings et al. 2008 Proc B to standardize metabolism-temperature #
+                                                              # # effects for Boltzmann equation. Derived from Simon's fit to Andy Clarke's data#
+              # E=0.63,                                         # activation energy, eV#
+              # k=8.62*10^-5                                   # Boltzmann's constant#
+            # Complexity-size dependent prey vulnerability:#
+            # Environmental Input:#
+            #  env.drivers =  "drivers"         #
+          )#
+  return(param)#
+}#
+param <- Param()
+param
+# Set up size grid:#
+  w         <- 10^(seq(from=log10(param$w0),to=log10(param$wMax),length.out=param$ngrid)) # creating sequence from #
+  dw        <- diff(w)#
+  dw[param$ngrid] <- dw[param$ngrid-1] # Set final dw as same as one before#
+  ngridPP   <- 30#
+  # Combine consumer and producer w#
+  # Might keep seperate for future...#
+  wFull             <- c(10^seq(from=log10(w[1]/(4*max(param$groups$beta,na.rm=T))), to = log10(w[1]-dw[1]),length.out=ngridPP),w)#
+  ngridfull         <- length(wFull) # just a reference, could be calculated on the fly#
+  dwFull            <- diff(wFull)#
+  dwFull[ngridfull] <- dwFull[ngridfull-1]#
+  idxGrid           <- (ngridPP+1):ngridfull # shortcut to index just the dynamic consumer/predator Size Spectra#
+  nsave  <- floor(param$tmax/(param$dt*param$isave)) # no. of time slots to save#
+  nss <- param$nss#
+  ngrid <- ngridfull#
+  nbio <- param$nbio#
+  model =  list(#
+      param = param,#
+      # Grid parameters#
+      w = w,#
+      dw = dw,#
+      wFull = wFull,#
+      ngridfull = ngridfull,#
+      dwFull = dwFull,#
+      idxGrid = idxGrid,#
+     # Functional Group parameters - for size spectra components only#
+      SearchVol = matrix(NA,nrow=nss,ncol=ngrid),#
+      predkernel = array(NA,dim=c(nss,ngrid,length(wFull))),      #
+      #intrinsic natural mortality#
+      Z0 =  matrix(NA,nrow=nss,ncol=ngrid),#
+#
+      # senescence mortality rate to limit large fish from building up in the system#
+      # same function as in Law et al 2008, with chosen parameters gives similar M2 values as in Hall et al. 2006#
+#
+      SM = matrix(NA,nrow=nss,ncol=ngrid),#
+      # # # Resource spectrum - only use if dynamics of resource spectrum included#
+      #rrPP = param$rPP*wFull^(param$n-1), #weight specific plankton growth rate ###
+      #NinfPP = rep(NA,ngridfull),#
+      # Arrays to save output #
+      # Can add more if necessary#
+      N = array(0,dim=c(nsave,nss,ngrid)),      # Abundance density spectra#
+      BP = array(0,dim=c(nsave,nbio)),          # Biomass pools#
+      Fm = array(0,dim=c(nsave,nss,ngrid)),     # Fishing/harvesting mortality#
+      # RDI = matrix(0,nrow=nsave,ncol=nspp),   # Recruitment (NEED TO REVISIT THIS IF COEXISTENCE BECOMES AN ISSUE)#
+      M2 = array(0,dim=c(nsave,nss,length(w))), # predation mortality of functional size spectrum groups#
+      gg = array(0,dim=c(nsave,nss,ngrid)),     # growth rates of functional size spectrum groups#
+      Yield = matrix(0,nrow=nsave,ncol=(nss + nbio)),    # Total Yields of fisheries/harvesting by group#
+      Biomass = matrix(0,nrow=nsave,ncol=(nss + nbio)) # Total biomass across sizes by group#
+      )#
+      # Initial population abundance - moved down#
+      #if (ContinueCalculation == T) model$N[1,,] = initialcommunity$N[dim(initialcommunity$N)[1],,]#
+      #if (ContinueCalculation == F) model$N[1,,] <- unlist(tapply(w,1:length(w),function(wx,N0,w0,slope0,Wmax) N0 * (wx/w0)^slope0,N0=10^5,w0=w[1],slope0=-2))                                           #
+      # end with(param)
+nss
+# Shortcuts#
+      grp <- param$groups#
+      dt <- param$dt#
+      theta <- param$theta#
+      idx <- 2:ngrid#
+      # max index of array #
+      itimemax <- param$tmax/dt #
+      N <- model$N#
+      BP <- model$BP#
+       # Matrices for solver#
+       A <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       B <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       S <- matrix(0,nrow=nss-1,ncol=ngrid)       #
+	# fixed SearchVol,  predkernal arrays and non-predation mortality terms
+SearchVol[] <- unlist(tapply(wFull,1:ngrid,function(wx,A,gamma) A*wx^gamma,gamma=param$groups[grep("Spectrum",param$groups$Type),"gamma"],A=param$groups[grep("Spectrum",param$groups$Type),"A"]))
+SearchVol
+SearchVol = matrix(NA,nrow=nss,ncol=ngrid)
+SearchVol
+param$groups[grep("Spectrum",param$groups$Type),"gamma"]
+A=param$groups[grep("Spectrum",param$groups$Type),"A"]
+SearchVol[] <- unlist(tapply(wFull,1:ngrid,function(wx,A,gamma) A*wx^gamma,gamma=param$groups[grep("Spectrum",param$groups$Type),"gamma"],A=param$groups[grep("Spectrum",param$groups$Type),"A"]))
+SearchVol
+# Could improve this...#
+      predkernel[] <- param$groups[grep("Spectrum",param$groups$Type),"beta"]#
+      predkernel[] <- exp(-0.5*sweep(log(sweep(sweep(predkernel,3,model$wFull,"*")^-1,2,model$wFull,"*")),1,param$groups[grep("Spectrum",param$groups$Type),"sigma"],"/")^2)
+predkernel = array(NA,dim=c(nss,ngrid,length(wFull)))
+predkernel[] <- param$groups[grep("Spectrum",param$groups$Type),"beta"]#
+      predkernel[] <- exp(-0.5*sweep(log(sweep(sweep(predkernel,3,model$wFull,"*")^-1,2,model$wFull,"*")),1,param$groups[grep("Spectrum",param$groups$Type),"sigma"],"/")^2)
+predkernel[6,]
+predkernel[6,,]
+image(predkernel[6,,])
+image(predkernel[5,,])
+image(predkernel[2,,])
+predkernel[] <- sweep(predkernel,c(2,3),combn(model$wFull,1,function(x,w)x<w,w=wFull),"*") # find out the untrues and then multiply
+predkernel[] <- sweep(predkernel,c(2,3),combn(model$wFull,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply
+combn(model$wFull,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type)
+)
+combn(model$wFull,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"])
+sweep(predkernel,c(2,3),combn(model$wFull,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply
+unlist(tapply(wFull,1:ngrid,function(wx,wmat,zspre,zsexp) zspre*(wx/wmat)^zsexp,wmat=param$groups[grep("Spectrum",param$groups$Type),"wmat"],zspre=param$groups[grep("Spectrum",param$groups$Type),"zspre"],zsexp=param$groups[grep("Spectrum",param$groups$Type),"zsexp"]))
+SM[]
+param
+nss
+model =  list(#
+      param = param,#
+      # Grid parameters#
+      w = w,#
+      dw = dw,#
+      wFull = wFull,#
+      ngridfull = ngridfull,#
+      dwFull = dwFull,#
+      idxGrid = idxGrid,#
+     # Functional Group parameters - for size spectra components only#
+      SearchVol = matrix(NA,nrow=nss,ncol=ngrid),#
+      predkernel = array(NA,dim=c(nss,ngrid,length(wFull))),      #
+      #intrinsic natural mortality#
+      Z0 =  matrix(NA,nrow=nss,ncol=ngrid),#
+#
+      # senescence mortality rate to limit large fish from building up in the system#
+      # same function as in Law et al 2008, with chosen parameters gives similar M2 values as in Hall et al. 2006#
+#
+      SM = matrix(NA,nrow=nss,ncol=ngrid),#
+      # # # Resource spectrum - only use if dynamics of resource spectrum included#
+      #rrPP = param$rPP*wFull^(param$n-1), #weight specific plankton growth rate ###
+      #NinfPP = rep(NA,ngridfull),#
+      # Arrays to save output #
+      # Can add more if necessary#
+      N = array(0,dim=c(nsave,nss,ngrid)),      # Abundance density spectra#
+      BP = array(0,dim=c(nsave,nbio)),          # Biomass pools#
+      Fm = array(0,dim=c(nsave,nss,ngrid)),     # Fishing/harvesting mortality#
+      # RDI = matrix(0,nrow=nsave,ncol=nspp),   # Recruitment (NEED TO REVISIT THIS IF COEXISTENCE BECOMES AN ISSUE)#
+      M2 = array(0,dim=c(nsave,nss,length(w))), # predation mortality of functional size spectrum groups#
+      gg = array(0,dim=c(nsave,nss,ngrid)),     # growth rates of functional size spectrum groups#
+      Yield = matrix(0,nrow=nsave,ncol=(nss + nbio)),    # Total Yields of fisheries/harvesting by group#
+      Biomass = matrix(0,nrow=nsave,ncol=(nss + nbio)) # Total biomass across sizes by group#
+      )
+# Shortcuts#
+      grp <- param$groups#
+      dt <- param$dt#
+      theta <- param$theta#
+      idx <- 2:ngrid#
+      # max index of array #
+      itimemax <- param$tmax/dt #
+      N <- model$N#
+      BP <- model$BP#
+       # Matrices for solver#
+       A <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       B <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       S <- matrix(0,nrow=nss-1,ncol=ngrid)
+SearchVol[] <- unlist(tapply(wFull,1:ngrid,function(wx,A,gamma) A*wx^gamma,gamma=param$groups[grep("Spectrum",param$groups$Type),"gamma"],A=param$groups[grep("Spectrum",param$groups$Type),"A"]))
+SearchVol[]
+# Could improve this...#
+      predkernel[] <- param$groups[grep("Spectrum",param$groups$Type),"beta"]#
+      predkernel[] <- exp(-0.5*sweep(log(sweep(sweep(predkernel,3,model$wFull,"*")^-1,2,model$wFull,"*")),1,param$groups[grep("Spectrum",param$groups$Type),"sigma"],"/")^2)#
+      predkernel[] <- sweep(predkernel,c(2,3),combn(model$wFull,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply
+predkernel[] <- param$groups[grep("Spectrum",param$groups$Type),"beta"]#
+      predkernel[] <- exp(-0.5*sweep(log(sweep(sweep(predkernel,3,model$wFull,"*")^-1,2,model$wFull,"*")),1,param$groups[grep("Spectrum",param$groups$Type),"sigma"],"/")^2)
+predkernel[]
+Param <- function(fileGroups="groupparams.csv",fileCoupling="couplingstrengths.csv",ENVinput=NA){#
+  # Read in functional group parameters from file:#
+  groups = read.csv(fileGroups)#
+  strengths = read.csv(fileCoupling)#
+  row.names(strengths) <- strengths[,1]#
+  #drivers = read.csv(ENVinput)#
+  # Set up parameter list#
+  param=list( #
+            # Model Structure:#
+              groups = groups,                                # functional group parameters#
+              theta  = strengths[-1],                         # coupling strengths, or interaction matrix for groups#
+            # Grid Structure:#
+              nss     = length(grep("Spectrum",groups$Type)), # Number of size spectrum groups#
+              nbio    = length(grep("Pool",groups$Type)),     # Number of unstructured biomass pool groups#
+              ngrid   = 130,                                  # No. of size classes          #
+              tmax    = 100,                                  # no. years#
+              dt      = 0.1,                                  # time step#
+              isave   = 1,                                    # how often to save results#
+              w0      = 0.001,                                # mass of eggs i.e. minimum size in g#
+              wMax    = 10^6,                                # max weight in grid#
+            # Resource Spectrum input (power law scaling of number versus body mass, kap is prefactor, lambda is exponent)#
+             kap = 0.1,#
+             lambda = -2    #
+            # Temperature dependence - same across all groups for the time being:#
+              # c1=25.22,                                       # constant used in Jennings et al. 2008 Proc B to standardize metabolism-temperature #
+                                                              # # effects for Boltzmann equation. Derived from Simon's fit to Andy Clarke's data#
+              # E=0.63,                                         # activation energy, eV#
+              # k=8.62*10^-5                                   # Boltzmann's constant#
+            # Complexity-size dependent prey vulnerability:#
+            # Environmental Input:#
+            #  env.drivers =  "drivers"         #
+          )#
+  return(param)#
+}#
+param <- Param()
+# Set up size grid,  note that producer and consumer spectra are combined on this grid#
+  w         <- 10^(seq(from=log10(param$w0),to=log10(param$wMax),length.out=param$ngrid)) # creating sequence from #
+  dw        <- diff(w)#
+  dw[param$ngrid] <- dw[param$ngrid-1] # Set final dw as same as one before#
+  # Might keep seperate for future...#
+  ngridPP <- 30#
+  idxGrid <- (ngridPP+1):ngridfull # shortcut to index just the dynamic consumer/predator Size Spectra#
+  nsave  <- floor(param$tmax/(param$dt*param$isave)) # no. of time slots to save#
+  nss <- param$nss#
+  ngrid <- ngridfull#
+  nbio <- param$nbio
+model =  list(#
+      param = param,#
+      # Grid parameters#
+      w = w,#
+      dw = dw,#
+      idxGrid = idxGrid,#
+     # Functional Group parameters - for size spectra components only#
+      SearchVol = matrix(NA,nrow=nss,ncol=ngrid),#
+      predkernel = array(NA,dim=c(nss,ngrid,ngrid)),      #
+      #intrinsic natural mortality#
+      Z0 =  matrix(NA,nrow=nss,ncol=ngrid),#
+#
+      # senescence mortality rate to limit large fish from building up in the system#
+      # same function as in Law et al 2008, with chosen parameters gives similar M2 values as in Hall et al. 2006#
+#
+      SM = matrix(NA,nrow=nss,ncol=ngrid),#
+      # Arrays to save output #
+      # Can add more if necessary#
+      N = array(0,dim=c(nsave,nss,ngrid)),      # Abundance density spectra#
+      BP = array(0,dim=c(nsave,nbio)),          # Biomass pools#
+      Fm = array(0,dim=c(nsave,nss,ngrid)),     # Fishing/harvesting mortality#
+      # RDI = matrix(0,nrow=nsave,ncol=nspp),   # Recruitment (NEED TO REVISIT THIS IF COEXISTENCE BECOMES AN ISSUE), reporduction off at moment#
+      M2 = array(0,dim=c(nsave,nss,length(w))), # predation mortality of functional size spectrum groups#
+      gg = array(0,dim=c(nsave,nss,ngrid)),     # growth rates of functional size spectrum groups#
+      Yield = matrix(0,nrow=nsave,ncol=(nss + nbio)),    # Total Yields of fisheries/harvesting by group#
+      Biomass = matrix(0,nrow=nsave,ncol=(nss + nbio)) # Total biomass across sizes by group#
+      )#
+      # Initial population abundance - moved down#
+      #if (ContinueCalculation == T) model$N[1,,] = initialcommunity$N[dim(initialcommunity$N)[1],,]#
+      #if (ContinueCalculation == F) model$N[1,,] <- unlist(tapply(w,1:length(w),function(wx,N0,w0,slope0,Wmax) N0 * (wx/w0)^slope0,N0=10^5,w0=w[1],slope0=-2))                                           #
+      # end with(param)
+# Shortcuts#
+      grp <- param$groups#
+      dt <- param$dt#
+      theta <- param$theta#
+      idx <- 2:ngrid#
+      # max index of array #
+      itimemax <- param$tmax/dt #
+      N <- model$N#
+      BP <- model$BP#
+       # Matrices for solver#
+       A <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       B <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       S <- matrix(0,nrow=nss-1,ncol=ngrid)       #
+	# fixed SearchVol,  predkernal arrays and non-predation mortality terms     #
+      SearchVol[] <- unlist(tapply(w,1:ngrid,function(wx,A,gamma) A*wx^gamma,gamma=param$groups[grep("Spectrum",param$groups$Type),"gamma"],A=param$groups[grep("Spectrum",param$groups$Type),"A"]))
+# Could improve this...#
+      predkernel[] <- param$groups[grep("Spectrum",param$groups$Type),"beta"]#
+      predkernel[] <- exp(-0.5*sweep(log(sweep(sweep(predkernel,3,model$w,"*")^-1,2,model$w,"*")),1,param$groups[grep("Spectrum",param$groups$Type),"sigma"],"/")^2)
+predkernel[] <- sweep(predkernel,c(2,3),combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply
+image(predkernel[6,,])
+# Could improve this...#
+      predkernel[] <- param$groups[grep("Spectrum",param$groups$Type),"beta"]#
+      predkernel[] <- exp(-0.5*sweep(log(sweep(sweep(predkernel,3,model$w,"*")^-1,2,model$w,"*")),1,param$groups[grep("Spectrum",param$groups$Type),"sigma"],"/")^2)
+image(predkernel[6,,])
+image(predkernel[4,,])
+image(predkernel[5,,])
+combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"])
+predkernel[] <- sweep(predkernel,1,combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply
+predkernel[] <- sweep(predkernel,2,combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply
+param$groups[grep("Spectrum",param$groups$Type),"w0"]
+predkernel[] <- sweep(predkernel,c(1,3),combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply
+image(predkernel[5,,])
+image(predkernel[4,,])
+predkernel[] <- param$groups[grep("Spectrum",param$groups$Type),"beta"]#
+      predkernel[] <- exp(-0.5*sweep(log(sweep(sweep(predkernel,3,model$w,"*")^-1,2,model$w,"*")),1,param$groups[grep("Spectrum",param$groups$Type),"sigma"],"/")^2)
+image(predkernel[4,,])
+image(predkernel5,,])
+image(predkernel[5,,])
+Z0[] <- param$m0*wFull^-0.25
+Z0[] <- param$m0*w^-0.25
+param$m0
+Z0[] <- unlist(tapply(wFull,1:ngrid,function(wx,m0) m0*wx^-0.25,m0=param$groups[grep("Spectrum",param$groups$Type),"mu0"]))
+Z0 =  matrix(NA,nrow=nss,ncol=ngrid)
+Z0[] <- unlist(tapply(wFull,1:ngrid,function(wx,m0) m0*wx^-0.25,m0=param$groups[grep("Spectrum",param$groups$Type),"mu0"]))
+Z0
+Z0[] <- unlist(tapply(wFull,1:ngrid,function(wx,m0) m0*wx^-0.25,m0=param$groups[,"mu0"]))
+Z0
+Z0[] <- unlist(tapply(w,1:ngrid,function(wx,m0) m0*wx^-0.25,m0=param$groups[,"mu0"]))
+Z0
+wFullmat <- matrix(w,byrow=T,nrow=nss,ncol=length(w))#
+      dwFullmat <- matrix(dw,byrow=T,nrow=nss,ncol=length(w))
+wFullmat
+SM[]
+Z0
+Z0[] <- sweep(SM,c(1,2),combn(model$wFull,1,function(w,wmat)w<wmax && w>w0,wmax=param$groups[grep("Spectrum",param$groups$Type),"wmax"],w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply by 0
+Z0[] <- sweep(SM,c(1,2),combn(model$wFull,1,function(w,wmat)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply by 0
+Z0[] <- unlist(tapply(w,1:ngrid,function(wx,m0) m0*wx^-0.25,m0=param$groups[grep("Spectrum",param$groups$Type),"mu0"]))#
+#
+     Z0[] <- sweep(SM,c(1,2),combn(model$wFull,1,function(w,wmat)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply by 0
+Z0[]
+combn(model$wFull,1,function(w,wmat)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"])
+param$groups[grep("Spectrum",param$groups$Type),"w0"]
+sweep(SM,c(1,2),combn(model$w,1,function(w,wmat)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply by 0
+sweep(SM,c(1,2),combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply by 0
+combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"])
+Z0[] <- unlist(tapply(w,1:ngrid,function(wx,m0) m0*wx^-0.25,m0=param$groups[grep("Spectrum",param$groups$Type),"mu0"]))#
+#
+     Z0[] <- sweep(Z0,c(1,2),combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply by 0
+Z0[]
+Param <- function(fileGroups="groupparams.csv",fileCoupling="couplingstrengths.csv",ENVinput=NA){#
+  # Read in functional group parameters from file:#
+  groups = read.csv(fileGroups)#
+  strengths = read.csv(fileCoupling)#
+  row.names(strengths) <- strengths[,1]#
+  #drivers = read.csv(ENVinput)#
+  # Set up parameter list#
+  param=list( #
+            # Model Structure:#
+              groups = groups,                                # functional group parameters#
+              theta  = strengths[-1],                         # coupling strengths, or interaction matrix for groups#
+            # Grid Structure:#
+              nss     = length(grep("Spectrum",groups$Type)), # Number of size spectrum groups#
+              nbio    = length(grep("Pool",groups$Type)),     # Number of unstructured biomass pool groups#
+              ngrid   = 130,                                  # No. of size classes          #
+              tmax    = 100,                                  # no. years#
+              dt      = 0.1,                                  # time step#
+              isave   = 1,                                    # how often to save results#
+              w0      = min(groups$w0),                                # minimum size in g of grid#
+              wMax    = max(groups$wmax),                                #  max size weight g of grid#
+            # Resource Spectrum input (power law scaling of number versus body mass, kap is prefactor, lambda is exponent)#
+             kap = 0.1,#
+             lambda = -2    #
+            # Temperature dependence - same across all groups for the time being:#
+              # c1=25.22,                                       # constant used in Jennings et al. 2008 Proc B to standardize metabolism-temperature #
+                                                              # # effects for Boltzmann equation. Derived from Simon's fit to Andy Clarke's data#
+              # E=0.63,                                         # activation energy, eV#
+              # k=8.62*10^-5                                   # Boltzmann's constant#
+            # Complexity-size dependent prey vulnerability:#
+            # Environmental Input:#
+            #  env.drivers =  "drivers"         #
+          )#
+  return(param)#
+}#
+param <- Param()
+param
+# Set up size grid,  note that producer and consumer spectra are combined on this grid#
+  w         <- 10^(seq(from=log10(param$w0),to=log10(param$wMax),length.out=param$ngrid)) # creating sequence from #
+  dw        <- diff(w)#
+  dw[param$ngrid] <- dw[param$ngrid-1] # Set final dw as same as one before
+# Might keep seperate for future...#
+  ngridPP <- 30#
+  idxGrid <- (ngridPP+1):ngridfull # shortcut to index just the dynamic consumer/predator Size Spectra#
+  nsave  <- floor(param$tmax/(param$dt*param$isave)) # no. of time slots to save#
+  nss <- param$nss#
+  ngrid <- ngridfull#
+  nbio <- param$nbio#
+  model =  list(#
+      param = param,#
+      # Grid parameters#
+      w = w,#
+      dw = dw,#
+      idxGrid = idxGrid,#
+     # Functional Group parameters - for size spectra components only#
+      SearchVol = matrix(NA,nrow=nss,ncol=ngrid),#
+      predkernel = array(NA,dim=c(nss,ngrid,ngrid)),      #
+      #intrinsic natural mortality#
+      Z0 =  matrix(NA,nrow=nss,ncol=ngrid),#
+#
+      # senescence mortality rate to limit large fish from building up in the system#
+      # same function as in Law et al 2008, with chosen parameters gives similar M2 values as in Hall et al. 2006#
+#
+      SM = matrix(NA,nrow=nss,ncol=ngrid),#
+      # Arrays to save output #
+      # Can add more if necessary#
+      N = array(0,dim=c(nsave,nss,ngrid)),      # Abundance density spectra#
+      BP = array(0,dim=c(nsave,nbio)),          # Biomass pools#
+      Fm = array(0,dim=c(nsave,nss,ngrid)),     # Fishing/harvesting mortality#
+      # RDI = matrix(0,nrow=nsave,ncol=nspp),   # Recruitment (NEED TO REVISIT THIS IF COEXISTENCE BECOMES AN ISSUE), reporduction off at moment#
+      M2 = array(0,dim=c(nsave,nss,length(w))), # predation mortality of functional size spectrum groups#
+      gg = array(0,dim=c(nsave,nss,ngrid)),     # growth rates of functional size spectrum groups#
+      Yield = matrix(0,nrow=nsave,ncol=(nss + nbio)),    # Total Yields of fisheries/harvesting by group#
+      Biomass = matrix(0,nrow=nsave,ncol=(nss + nbio)) # Total biomass across sizes by group#
+      )#
+      # Initial population abundance - moved down#
+      #if (ContinueCalculation == T) model$N[1,,] = initialcommunity$N[dim(initialcommunity$N)[1],,]#
+      #if (ContinueCalculation == F) model$N[1,,] <- unlist(tapply(w,1:length(w),function(wx,N0,w0,slope0,Wmax) N0 * (wx/w0)^slope0,N0=10^5,w0=w[1],slope0=-2))                                           #
+      # end with(param)
+param$idxGrid
+model$idxGrid
+grp <- param$groups#
+      dt <- param$dt#
+      theta <- param$theta#
+      idxGrid <- model$idxGrid#
+      # max index of array #
+      itimemax <- param$tmax/dt #
+      N <- model$N#
+      BP <- model$BP#
+       # Matrices for solver#
+       A <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       B <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       S <- matrix(0,nrow=nss-1,ncol=ngrid)
+# max index of array #
+      itimemax <- param$tmax/dt #
+      N <- model$N#
+      BP <- model$BP#
+       # Matrices for solver#
+       A <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       B <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       S <- matrix(0,nrow=nss-1,ncol=ngrid)
+# fixed SearchVol,  predkernal arrays and non-predation mortality terms     #
+      SearchVol[] <- unlist(tapply(w,1:ngrid,function(wx,A,gamma) A*wx^gamma,gamma=param$groups[grep("Spectrum",param$groups$Type),"gamma"],A=param$groups[grep("Spectrum",param$groups$Type),"A"]))#
+      # Could improve this...#
+      predkernel[] <- param$groups[grep("Spectrum",param$groups$Type),"beta"]#
+      predkernel[] <- exp(-0.5*sweep(log(sweep(sweep(predkernel,3,model$w,"*")^-1,2,model$w,"*")),1,param$groups[grep("Spectrum",param$groups$Type),"sigma"],"/")^2)#
+     # predkernel[] <- sweep(predkernel,c(1,3),combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply#
+    # other mortality   #
+     Z0[] <- unlist(tapply(w,1:ngrid,function(wx,m0) m0*wx^-0.25,m0=param$groups[grep("Spectrum",param$groups$Type),"mu0"]))#
+#
+     Z0[] <- sweep(Z0,c(1,2),combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply by 0#
+    # senescence mortality
+plot(prekernel[5,50,])
+plot(predkernel[5,50,])
+plot(predkernel[5,,50])
+predkernel[] <- sweep(predkernel,c(1,3),combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply
+plot(predkernel[5,50,])
+plot(predkernel[5,,50])
+plot(predkernel[5,110,])
+plot(predkernel[5,130,])
+plot(predkernel[5,,130])
+image(predkernel[5,,])
+image(predkernel[2,,])
+predkernel[] <- param$groups[grep("Spectrum",param$groups$Type),"beta"]#
+      predkernel[] <- exp(-0.5*sweep(log(sweep(sweep(predkernel,3,model$w,"*")^-1,2,model$w,"*")),1,param$groups[grep("Spectrum",param$groups$Type),"sigma"],"/")^2)
+image(predkernel[2,,])
+image(predkernel[5,,])
+image(predkernel[2,,])
+# other mortality   #
+     Z0[] <- unlist(tapply(w,1:ngrid,function(wx,m0) m0*wx^-0.25,m0=param$groups[grep("Spectrum",param$groups$Type),"mu0"]))#
+#
+     Z0[] <- sweep(Z0,c(1,2),combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply by 0
+Z0[]
+Param <- function(fileGroups="groupparams.csv",fileCoupling="couplingstrengths.csv",ENVinput=NA){#
+  # Read in functional group parameters from file:#
+  groups = read.csv(fileGroups)#
+  strengths = read.csv(fileCoupling)#
+  row.names(strengths) <- strengths[,1]#
+  #drivers = read.csv(ENVinput)#
+  # Set up parameter list#
+  param=list( #
+            # Model Structure:#
+              groups = groups,                                # functional group parameters#
+              theta  = strengths[-1],                         # coupling strengths, or interaction matrix for groups#
+            # Grid Structure:#
+              nss     = length(grep("Spectrum",groups$Type)), # Number of size spectrum groups#
+              nbio    = length(grep("Pool",groups$Type)),     # Number of unstructured biomass pool groups#
+              ngrid   = 130,                                  # No. of size classes          #
+              tmax    = 100,                                  # no. years#
+              dt      = 0.1,                                  # time step#
+              isave   = 1,                                    # how often to save results#
+              w0      = min(groups$w0),                                # minimum size in g of grid#
+              wMax    = max(groups$wmax),                                #  max size weight g of grid#
+            # Resource Spectrum input (power law scaling of number versus body mass, kap is prefactor, lambda is exponent)#
+             kap = 0.1,#
+             lambda = -2    #
+            # Temperature dependence - same across all groups for the time being:#
+              # c1=25.22,                                       # constant used in Jennings et al. 2008 Proc B to standardize metabolism-temperature #
+                                                              # # effects for Boltzmann equation. Derived from Simon's fit to Andy Clarke's data#
+              # E=0.63,                                         # activation energy, eV#
+              # k=8.62*10^-5                                   # Boltzmann's constant#
+            # Complexity-size dependent prey vulnerability:#
+            # Environmental Input:#
+            #  env.drivers =  "drivers"         #
+          )#
+  return(param)#
+}#
+param <- Param()
+Setup <- function(param) {#
+  # Set up size grid,  note that producer and consumer spectra are combined on this grid#
+  w         <- 10^(seq(from=log10(param$w0),to=log10(param$wMax),length.out=param$ngrid)) # creating sequence from #
+  dw        <- diff(w)#
+  dw[param$ngrid] <- dw[param$ngrid-1] # Set final dw as same as one before#
+  # Might keep seperate for future...#
+  ngridPP <- 30#
+  idxGrid <- (ngridPP+1):ngridfull # shortcut to index just the dynamic consumer/predator Size Spectra#
+  nsave  <- floor(param$tmax/(param$dt*param$isave)) # no. of time slots to save#
+  nss <- param$nss#
+  ngrid <- ngridfull#
+  nbio <- param$nbio#
+  model =  list(#
+      param = param,#
+      # Grid parameters#
+      w = w,#
+      dw = dw,#
+      idxGrid = idxGrid,#
+     # Functional Group parameters - for size spectra components only#
+      SearchVol = matrix(NA,nrow=nss,ncol=ngrid),#
+      predkernel = array(NA,dim=c(nss,ngrid,ngrid)),      #
+      #intrinsic natural mortality#
+      Z0 =  matrix(NA,nrow=nss,ncol=ngrid),#
+#
+      # senescence mortality rate to limit large fish from building up in the system#
+      # same function as in Law et al 2008, with chosen parameters gives similar M2 values as in Hall et al. 2006#
+#
+      SM = matrix(NA,nrow=nss,ncol=ngrid),#
+      # Arrays to save output #
+      # Can add more if necessary#
+      N = array(0,dim=c(nsave,nss,ngrid)),      # Abundance density spectra#
+      BP = array(0,dim=c(nsave,nbio)),          # Biomass pools#
+      Fm = array(0,dim=c(nsave,nss,ngrid)),     # Fishing/harvesting mortality#
+      # RDI = matrix(0,nrow=nsave,ncol=nspp),   # Recruitment (NEED TO REVISIT THIS IF COEXISTENCE BECOMES AN ISSUE), reporduction off at moment#
+      M2 = array(0,dim=c(nsave,nss,length(w))), # predation mortality of functional size spectrum groups#
+      gg = array(0,dim=c(nsave,nss,ngrid)),     # growth rates of functional size spectrum groups#
+      Yield = matrix(0,nrow=nsave,ncol=(nss + nbio)),    # Total Yields of fisheries/harvesting by group#
+      Biomass = matrix(0,nrow=nsave,ncol=(nss + nbio)) # Total biomass across sizes by group#
+      )#
+      # Initial population abundance - moved down#
+      #if (ContinueCalculation == T) model$N[1,,] = initialcommunity$N[dim(initialcommunity$N)[1],,]#
+      #if (ContinueCalculation == F) model$N[1,,] <- unlist(tapply(w,1:length(w),function(wx,N0,w0,slope0,Wmax) N0 * (wx/w0)^slope0,N0=10^5,w0=w[1],slope0=-2))                                           #
+      # end with(param) #
+      return(model)#
+}#
+# ------------------------------END-------------------------------------
+# Shortcuts#
+      grp <- param$groups#
+      dt <- param$dt#
+      theta <- param$theta#
+      #idxGrid <- model$idxGrid#
+      # max index of array #
+      itimemax <- param$tmax/dt #
+      N <- model$N#
+      BP <- model$BP#
+       # Matrices for solver#
+       A <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       B <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       S <- matrix(0,nrow=nss-1,ncol=ngrid)       #
+	# fixed SearchVol,  predkernal arrays and non-predation mortality terms     #
+      SearchVol[] <- unlist(tapply(w,1:ngrid,function(wx,A,gamma) A*wx^gamma,gamma=param$groups[grep("Spectrum",param$groups$Type),"gamma"],A=param$groups[grep("Spectrum",param$groups$Type),"A"]))#
+      # Could improve this...dims are: group x pred sizes x prey sizes#
+      predkernel[] <- param$groups[grep("Spectrum",param$groups$Type),"beta"]#
+      predkernel[] <- exp(-0.5*sweep(log(sweep(sweep(predkernel,3,model$w,"*")^-1,2,model$w,"*")),1,param$groups[grep("Spectrum",param$groups$Type),"sigma"],"/")^2)
+predkernel[] <- sweep(predkernel,c(1,2),combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply
+plot(w,predkernel[5,130,],log="x")
+plot(w,predkernel[5,,130],log="x")
+predkernel[] <- param$groups[grep("Spectrum",param$groups$Type),"beta"]#
+      predkernel[] <- exp(-0.5*sweep(log(sweep(sweep(predkernel,3,model$w,"*")^-1,2,model$w,"*")),1,param$groups[grep("Spectrum",param$groups$Type),"sigma"],"/")^2)
+plot(w,predkernel[5,,130],log="x")
+plot(w,predkernel[5,130,],log="x")
+plot(w,predkernel[6,130,],log="x")
+plot(w,predkernel[6,100,],log="x")
+plot(w,predkernel[5,100,],log="x")
+Param <- function(fileGroups="groupparams.csv",fileCoupling="couplingstrengths.csv",ENVinput=NA){#
+  # Read in functional group parameters from file:#
+  groups = read.csv(fileGroups)#
+  strengths = read.csv(fileCoupling)#
+  row.names(strengths) <- strengths[,1]#
+  #drivers = read.csv(ENVinput)#
+  # Set up parameter list#
+  param=list( #
+            # Model Structure:#
+              groups = groups,                                # functional group parameters#
+              theta  = strengths[-1],                         # coupling strengths, or interaction matrix for groups#
+            # Grid Structure:#
+              nss     = length(grep("Spectrum",groups$Type)), # Number of size spectrum groups#
+              nbio    = length(grep("Pool",groups$Type)),     # Number of unstructured biomass pool groups#
+              ngrid   = 130,                                  # No. of size classes          #
+              tmax    = 100,                                  # no. years#
+              dt      = 0.1,                                  # time step#
+              isave   = 1,                                    # how often to save results#
+              w0      = min(groups$w0),                                # minimum size in g of grid#
+              wMax    = max(groups$wmax),                                #  max size weight g of grid#
+            # Resource Spectrum input (power law scaling of number versus body mass, kap is prefactor, lambda is exponent)#
+             kap = 0.1,#
+             lambda = -2    #
+            # Temperature dependence - same across all groups for the time being:#
+              # c1=25.22,                                       # constant used in Jennings et al. 2008 Proc B to standardize metabolism-temperature #
+                                                              # # effects for Boltzmann equation. Derived from Simon's fit to Andy Clarke's data#
+              # E=0.63,                                         # activation energy, eV#
+              # k=8.62*10^-5                                   # Boltzmann's constant#
+            # Complexity-size dependent prey vulnerability:#
+            # Environmental Input:#
+            #  env.drivers =  "drivers"         #
+          )#
+  return(param)#
+}#
+param <- Param()#
+# ---
+Setup <- function(param) {#
+  # Set up size grid,  note that producer and consumer spectra are combined on this grid#
+  w         <- 10^(seq(from=log10(param$w0),to=log10(param$wMax),length.out=param$ngrid)) # creating sequence from #
+  dw        <- diff(w)#
+  dw[param$ngrid] <- dw[param$ngrid-1] # Set final dw as same as one before#
+  # Might keep seperate for future...#
+  ngridPP <- 30#
+  idxGrid <- (ngridPP+1):ngridfull # shortcut to index just the dynamic consumer/predator Size Spectra#
+  nsave  <- floor(param$tmax/(param$dt*param$isave)) # no. of time slots to save#
+  nss <- param$nss#
+  ngrid <- ngridfull#
+  nbio <- param$nbio#
+  model =  list(#
+      param = param,#
+      # Grid parameters#
+      w = w,#
+      dw = dw,#
+      idxGrid = idxGrid,#
+     # Functional Group parameters - for size spectra components only#
+      SearchVol = matrix(NA,nrow=nss,ncol=ngrid),#
+      predkernel = array(NA,dim=c(nss,ngrid,ngrid)),      #
+      #intrinsic natural mortality#
+      Z0 =  matrix(NA,nrow=nss,ncol=ngrid),#
+#
+      # senescence mortality rate to limit large fish from building up in the system#
+      # same function as in Law et al 2008, with chosen parameters gives similar M2 values as in Hall et al. 2006#
+#
+      SM = matrix(NA,nrow=nss,ncol=ngrid),#
+      # Arrays to save output #
+      # Can add more if necessary#
+      N = array(0,dim=c(nsave,nss,ngrid)),      # Abundance density spectra#
+      BP = array(0,dim=c(nsave,nbio)),          # Biomass pools#
+      Fm = array(0,dim=c(nsave,nss,ngrid)),     # Fishing/harvesting mortality#
+      # RDI = matrix(0,nrow=nsave,ncol=nspp),   # Recruitment (NEED TO REVISIT THIS IF COEXISTENCE BECOMES AN ISSUE), reporduction off at moment#
+      M2 = array(0,dim=c(nsave,nss,length(w))), # predation mortality of functional size spectrum groups#
+      gg = array(0,dim=c(nsave,nss,ngrid)),     # growth rates of functional size spectrum groups#
+      Yield = matrix(0,nrow=nsave,ncol=(nss + nbio)),    # Total Yields of fisheries/harvesting by group#
+      Biomass = matrix(0,nrow=nsave,ncol=(nss + nbio)) # Total biomass across sizes by group#
+      )#
+      # Initial population abundance - moved down#
+      #if (ContinueCalculation == T) model$N[1,,] = initialcommunity$N[dim(initialcommunity$N)[1],,]#
+      #if (ContinueCalculation == F) model$N[1,,] <- unlist(tapply(w,1:length(w),function(wx,N0,w0,slope0,Wmax) N0 * (wx/w0)^slope0,N0=10^5,w0=w[1],slope0=-2))                                           #
+      # end with(param) #
+      return(model)#
+}
+# Set up size grid,  note that producer and consumer spectra are combined on this grid#
+  w         <- 10^(seq(from=log10(param$w0),to=log10(param$wMax),length.out=param$ngrid)) # creating sequence from #
+  dw        <- diff(w)#
+  dw[param$ngrid] <- dw[param$ngrid-1] # Set final dw as same as one before#
+  # Might keep seperate for future...#
+  ngridPP <- 30#
+  idxGrid <- (ngridPP+1):ngridfull # shortcut to index just the dynamic consumer/predator Size Spectra#
+  nsave  <- floor(param$tmax/(param$dt*param$isave)) # no. of time slots to save#
+  nss <- param$nss#
+  ngrid <- ngridfull#
+  nbio <- param$nbio#
+  model =  list(#
+      param = param,#
+      # Grid parameters#
+      w = w,#
+      dw = dw,#
+      idxGrid = idxGrid,#
+     # Functional Group parameters - for size spectra components only#
+      SearchVol = matrix(NA,nrow=nss,ncol=ngrid),#
+      predkernel = array(NA,dim=c(nss,ngrid,ngrid)),      #
+      #intrinsic natural mortality#
+      Z0 =  matrix(NA,nrow=nss,ncol=ngrid),#
+#
+      # senescence mortality rate to limit large fish from building up in the system#
+      # same function as in Law et al 2008, with chosen parameters gives similar M2 values as in Hall et al. 2006#
+#
+      SM = matrix(NA,nrow=nss,ncol=ngrid),#
+      # Arrays to save output #
+      # Can add more if necessary#
+      N = array(0,dim=c(nsave,nss,ngrid)),      # Abundance density spectra#
+      BP = array(0,dim=c(nsave,nbio)),          # Biomass pools#
+      Fm = array(0,dim=c(nsave,nss,ngrid)),     # Fishing/harvesting mortality#
+      # RDI = matrix(0,nrow=nsave,ncol=nspp),   # Recruitment (NEED TO REVISIT THIS IF COEXISTENCE BECOMES AN ISSUE), reporduction off at moment#
+      M2 = array(0,dim=c(nsave,nss,length(w))), # predation mortality of functional size spectrum groups#
+      gg = array(0,dim=c(nsave,nss,ngrid)),     # growth rates of functional size spectrum groups#
+      Yield = matrix(0,nrow=nsave,ncol=(nss + nbio)),    # Total Yields of fisheries/harvesting by group#
+      Biomass = matrix(0,nrow=nsave,ncol=(nss + nbio)) # Total biomass across sizes by group#
+      )#
+      # Initial population abundance - moved down#
+      #if (ContinueCalculation == T) model$N[1,,] = initialcommunity$N[dim(initialcommunity$N)[1],,]#
+      #if (ContinueCalculation == F) model$N[1,,] <- unlist(tapply(w,1:length(w),function(wx,N0,w0,slope0,Wmax) N0 * (wx/w0)^slope0,N0=10^5,w0=w[1],slope0=-2))                                           #
+      # end with(param)
+# Shortcuts#
+      grp <- param$groups#
+      dt <- param$dt#
+      theta <- param$theta#
+      #idxGrid <- model$idxGrid#
+      # max index of array #
+      itimemax <- param$tmax/dt #
+      N <- model$N#
+      BP <- model$BP#
+       # Matrices for solver#
+       A <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       B <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       S <- matrix(0,nrow=nss-1,ncol=ngrid)       #
+	# fixed SearchVol,  predkernal arrays and non-predation mortality terms     #
+      SearchVol[] <- unlist(tapply(w,1:ngrid,function(wx,A,gamma) A*wx^gamma,gamma=param$groups[grep("Spectrum",param$groups$Type),"gamma"],A=param$groups[grep("Spectrum",param$groups$Type),"A"]))#
+      # Could improve this...dims are: group x pred sizes x prey sizes#
+      predkernel[] <- param$groups[grep("Spectrum",param$groups$Type),"beta"]#
+      predkernel[] <- exp(-0.5*sweep(log(sweep(sweep(predkernel,3,model$w,"*")^-1,2,model$w,"*")),1,param$groups[grep("Spectrum",param$groups$Type),"sigma"],"/")^2)#
+    # predkernel[] <- sweep(predkernel,c(1,2),combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply#
+    # other mortality   #
+     Z0[] <- unlist(tapply(w,1:ngrid,function(wx,m0) m0*wx^-0.25,m0=param$groups[grep("Spectrum",param$groups$Type),"mu0"]))#
+#
+     Z0[] <- sweep(Z0,c(1,2),combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply by 0#
+    # senescence mortality  #
+      SM[] <- unlist(tapply(w,1:ngrid,function(wx,wmat,zspre,zsexp) zspre*(wx/wmat)^zsexp,wmat=param$groups[grep("Spectrum",param$groups$Type),"wmat"],zspre=param$groups[grep("Spectrum",param$groups$Type),"zspre"],zsexp=param$groups[grep("Spectrum",param$groups$Type),"zsexp"]))
+Z0[]
+SM[] <- unlist(tapply(w,1:ngrid,function(wx,wmat,zspre,zsexp) zspre*(wx/wmat)^zsexp,wmat=param$groups[grep("Spectrum",param$groups$Type),"wmat"],zspre=param$groups[grep("Spectrum",param$groups$Type),"zspre"],zsexp=param$groups[grep("Spectrum",param$groups$Type),"zsexp"]))
+SM = matrix(NA,nrow=nss,ncol=ngrid)
+SM
+N = array(0,dim=c(nsave,nss,ngrid))
+BP = array(0,dim=c(nsave,nbio)),          # Biomass pools#
+      Fm = array(0,dim=c(nsave,nss,ngrid)),     # Fishing/harvesting mortality#
+      # RDI = matrix(0,nrow=nsave,ncol=nspp),   # Recruitment (NEED TO REVISIT THIS IF COEXISTENCE BECOMES AN ISSUE), reporduction off at moment#
+      M2 = array(0,dim=c(nsave,nss,length(w))), # predation mortality of functional size spectrum groups#
+      gg = array(0,dim=c(nsave,nss,ngrid)),     # growth rates of functional size spectrum groups#
+      Yield = matrix(0,nrow=nsave,ncol=(nss + nbio)),    # Total Yields of fisheries/harvesting by group#
+      Biomass = matrix(0,nrow=nsave,ncol=(nss + nbio)) # Total biomass across sizes by group#
+      )
+# Shortcuts#
+      grp <- param$groups#
+      dt <- param$dt#
+      theta <- param$theta#
+      #idxGrid <- model$idxGrid#
+      # max index of array #
+      itimemax <- param$tmax/dt #
+      N <- model$N#
+      BP <- model$BP#
+       # Matrices for solver#
+       A <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       B <- matrix(0,nrow=nss-1,ncol=ngrid)#
+       S <- matrix(0,nrow=nss-1,ncol=ngrid)       #
+	# fixed SearchVol,  predkernal arrays and non-predation mortality terms     #
+      SearchVol[] <- unlist(tapply(w,1:ngrid,function(wx,A,gamma) A*wx^gamma,gamma=param$groups[grep("Spectrum",param$groups$Type),"gamma"],A=param$groups[grep("Spectrum",param$groups$Type),"A"]))#
+      # Could improve this...dims are: group x pred sizes x prey sizes#
+      predkernel[] <- param$groups[grep("Spectrum",param$groups$Type),"beta"]#
+      predkernel[] <- exp(-0.5*sweep(log(sweep(sweep(predkernel,3,model$w,"*")^-1,2,model$w,"*")),1,param$groups[grep("Spectrum",param$groups$Type),"sigma"],"/")^2)
+# other mortality   #
+     Z0[] <- unlist(tapply(w,1:ngrid,function(wx,m0) m0*wx^-0.25,m0=param$groups[grep("Spectrum",param$groups$Type),"mu0"]))#
+#
+     Z0[] <- sweep(Z0,c(1,2),combn(model$w,1,function(w,w0)w>w0,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"]),"*") # find out the untrues and then multiply by 0
+SM[] <- unlist(tapply(w,1:ngrid,function(wx,wmat,zspre,zsexp) zspre*(wx/wmat)^zsexp,wmat=param$groups[grep("Spectrum",param$groups$Type),"wmat"],zspre=param$groups[grep("Spectrum",param$groups$Type),"zspre"],zsexp=param$groups[grep("Spectrum",param$groups$Type),"zsexp"]))
+SM[] <- sweep(SM,c(1,2),combn(model$wFull,1,function(w,wmat)w>wmat,wmat=param$groups[grep("Spectrum",param$groups$Type),"wmat"]),"*") # find out the untrues and then multiply by 0
+SM[] <- sweep(SM,c(1,2),combn(model$w,1,function(w,wmat)w>wmat,wmat=param$groups[grep("Spectrum",param$groups$Type),"wmat"]),"*") # find out the untrues and then multiply by 0
+Z0
+SM
+wFullmat <- matrix(w,byrow=T,nrow=nss,ncol=length(w))#
+      dwFullmat <- matrix(dw,byrow=T,nrow=nss,ncol=length(w))
+N[1,,] <- unlist(tapply(wFull,1:length(wFull),function(wx,N0,w0,slope0,Wmax) N0 * (wx/w0)^slope0,N0=10^5,w0=param$groups[grep("Spectrum",param$groups$Type),"w0"],slope0=-2))
+[1,,]
+N[1,,]
+N[itime, grep("ResourceSpectrum",param$groups$Type),] <- param$kap*wFull^(-param$lambda) # the resource carrying capacity - one for each mp and m (130 of them)#
+         N[itime, grep("ResourceSpectrum",param$groups$Type),wFull>10] <- 0      #set density of sizes < plankton cutoff size = 10 g
+N[itime, grep("ResourceSpectrum",param$groups$Type),] <- param$kap*w^(-param$lambda) # the resource carrying capacity - one for each mp and m (130 of them)#
+         N[itime, grep("ResourceSpectrum",param$groups$Type),w>10] <- 0      #set density of sizes < plankton cutoff size = 10 g
+N[itime, grep("ResourceSpectrum",param$groups$Type),]
+Neff <- as.matrix(theta) %*% N[itime,,]  # use coupling matrix
+Neff
+theta
+N[itime,,]
+?mutate
+library(dplyr)
+?mutate
+as.matrix(theta)
+sweep(as.matrix(theta),c(1,2),N[itime,,])
+colSums(aperm(sweep(theta,c(2,4),N[itime,,],"*"),c(2,1,3,4)))
+as.matrix(theta) %*% N[itime,,]
+dim(Neff)
+N[itime,,]
+as.matrix(theta)
+sweep(theta,c(2),N[itime,,],"*")
+sweep(theta,c(1:3),N[itime,,],"*")
+sweep(theta,c(1,2,3),N[itime,,],"*")
+sweep(theta,c(1,2),N[itime,,],"*")
+sweep(theta,c(2,3),N[itime,,],"*")
+sweep(theta,c(1,3),N[itime,,],"*")
+as.matrix(theta)%*%  %*% N[itime,,]
+predgrp=2
+Neff <- as.matrix(theta[,predgrp]) %*% N[itime,,]  # use coupling matrix
+theta[,predgrp]
+N[itime,,]
+sweep(N[itime,,],c(2,3),theta[,predgrp],"*")
+theta[,predgrp]
+N[itime,,]
+theta[,predgrp]
+Neff[] <- sweep(N[itime,,],c(1,2),theta[,predgrp],"*")  # use coupling matrix
+Neff
+Param <- function(fileGroups="groupparams.csv",fileCoupling="couplingstrengths.csv",ENVinput=NA){#
+  # Read in functional group parameters from file:#
+  groups = read.csv(fileGroups)#
+  strengths = read.csv(fileCoupling)#
+  row.names(strengths) <- strengths[,1]#
+  #drivers = read.csv(ENVinput)#
+  # Set up parameter list#
+  param=list( #
+            # Model Structure:#
+              groups = groups,                                # functional group parameters#
+              theta  = strengths[-1],                         # coupling strengths, or interaction matrix for groups#
+            # Grid Structure:#
+              nss     = length(grep("Spectrum",groups$Type)), # Number of size spectrum groups#
+              npred   = length(grep("Predator",groups$Type)), # Number of predator groups#
+              nbio    = length(grep("Pool",groups$Type)),     # Number of unstructured biomass pool groups#
+              ngrid   = 130,                                  # No. of size classes          #
+              tmax    = 100,                                  # no. years#
+              dt      = 0.1,                                  # time step#
+              isave   = 1,                                    # how often to save results#
+              w0      = min(groups$w0),                                # minimum size in g of grid#
+              wMax    = max(groups$wmax),                                #  max size weight g of grid#
+            # Resource Spectrum input (power law scaling of number versus body mass, kap is prefactor, lambda is exponent)#
+             kap = 0.1,#
+             lambda = -2    #
+            # Temperature dependence - same across all groups for the time being:#
+              # c1=25.22,                                       # constant used in Jennings et al. 2008 Proc B to standardize metabolism-temperature #
+                                                              # # effects for Boltzmann equation. Derived from Simon's fit to Andy Clarke's data#
+              # E=0.63,                                         # activation energy, eV#
+              # k=8.62*10^-5                                   # Boltzmann's constant#
+            # Complexity-size dependent prey vulnerability:#
+            # Environmental Input:#
+            #  env.drivers =  "drivers"         #
+          )#
+  return(param)#
+}#
+param <- Param()
+# Set up size grid,  note that producer and consumer spectra are combined on this grid#
+  w         <- 10^(seq(from=log10(param$w0),to=log10(param$wMax),length.out=param$ngrid)) # creating sequence from #
+  dw        <- diff(w)#
+  dw[param$ngrid] <- dw[param$ngrid-1] # Set final dw as same as one before#
+  # Might keep seperate for future...#
+  ngridPP <- 30#
+  idxGrid <- (ngridPP+1):ngridfull # shortcut to index just the dynamic consumer/predator Size Spectra, perhaps not needed here#
+  nsave  <- floor(param$tmax/(param$dt*param$isave)) # no. of time slots to save#
+  nss <- param$nss#
+  npred <-param$npred#
+  ngrid <- ngridfull#
+  nbio <- param$nbio#
+  model =  list(#
+      param = param,#
+      # Grid parameters#
+      w = w,#
+      dw = dw,#
+      idxGrid = idxGrid,#
+     # Functional Group parameters - for size spectra components only#
+      SearchVol = matrix(NA,nrow=nss,ncol=ngrid),#
+      predkernel = array(NA,dim=c(nss,ngrid,ngrid)),      #
+      Neff = array(NA,dim=c(nss,ngrid,npred)),#
+      #intrinsic natural mortality#
+      Z0 =  matrix(NA,nrow=nss,ncol=ngrid),#
+#
+      # senescence mortality rate to limit large fish from building up in the system#
+      # same function as in Law et al 2008, with chosen parameters gives similar M2 values as in Hall et al. 2006#
+#
+      SM = matrix(NA,nrow=nss,ncol=ngrid),#
+      # Arrays to save output #
+      # Can add more if necessary#
+      N = array(0,dim=c(nsave,nss,ngrid)),      # Abundance density spectra#
+      BP = array(0,dim=c(nsave,nbio)),          # Biomass pools#
+      Fm = array(0,dim=c(nsave,nss,ngrid)),     # Fishing/harvesting mortality#
+      # RDI = matrix(0,nrow=nsave,ncol=nspp),   # Recruitment (NEED TO REVISIT THIS IF COEXISTENCE BECOMES AN ISSUE), reporduction off at moment#
+      M2 = array(0,dim=c(nsave,nss,length(w))), # predation mortality of functional size spectrum groups#
+      gg = array(0,dim=c(nsave,nss,ngrid)),     # growth rates of functional size spectrum groups#
+      Yield = matrix(0,nrow=nsave,ncol=(nss + nbio)),    # Total Yields of fisheries/harvesting by group#
+      Biomass = matrix(0,nrow=nsave,ncol=(nss + nbio)) # Total biomass across sizes by group#
+      )
+Neff = array(NA,dim=c(nss,ngrid,npred))
+Neff[]
+Neff[] <- sweep(N[itime,,],c(1:3),theta,"*")  # use coupling matrix
+N[itime,,]
+sweep(N[itime,,],c(1,2,3),theta,"*")
+sweep(N[itime,,],c(1,3),theta,"*")
+N[itime,,]%*%theta[,predgrp]
+predgrp=2
+npred
+N[itime,,]*theta[,predgrp]
+theta[,predgrp]
+Neff[,,predgrp] <- N[itime,,]*theta[,predgrp]  # use coupling matrix
+predkernel
+rowSums(sweep(model$predkernel[predgrp,,],c(1,3),Neff*dwmat*wmat,"*"),dims=2)
+sweep(model$predkernel[predgrp,,],c(1,3),Neff[,,predgrp]*dwmat*wmat,"*")
+model$predkernel[predgrp,,]
+# Could improve this...dims are: group x pred sizes x prey sizes#
+      predkernel[] <- param$groups[grep("Spectrum",param$groups$Type),"beta"]#
+      predkernel[] <- exp(-0.5*sweep(log(sweep(sweep(predkernel,3,model$w,"*")^-1,2,model$w,"*")),1,param$groups[grep("Spectrum",param$groups$Type),"sigma"],"/")^2)
+Neff[,,predgrp]*dwmat*wmat
+wmat <- matrix(w,byrow=T,nrow=nss,ncol=length(w))#
+      dwmat <- matrix(dw,byrow=T,nrow=nss,ncol=length(w))
+sweep(model$predkernel[predgrp,,],c(1,3),Neff[,,predgrp]*dwmat*wmat,"*")
+sweep(predkernel[predgrp,,],c(1,3),Neff[,,predgrp]*dwmat*wmat,"*")
+predkernel[predgrp,,]
+Neff[,,predgrp]
+dim(predkernel)
+dim(Neff)
+dim(Neff[,,predgrp])
+dim(predkernel[predgrp,,])
+sweep(Neff[,,predgrp],c(1,2),dwmat*wmat,"*")
+wmat
+Neff[,,predgrp]
+Neff[,,predgrp]*dwmat*wmat
+sweep(predkernel[predgrp,,],c(1,3),Neff[,,predgrp]*dwmat*wmat,"*")
+predkernel[predgrp,,]
+sweep(predkernel[predgrp,,],c(1,2),Neff[,,predgrp]*dwmat*wmat,"*")
+sweep(predkernel[predgrp,,],c(2,3),Neff[,,predgrp]*dwmat*wmat,"*")
+sweep(predkernel[predgrp,,],3,Neff[,,predgrp]*dwmat*wmat,"*")
+predkernel[predgrp,,]%*%Neff[,,predgrp]*dwmat*wmat
+predkernel[predgrp,,] %*% Neff[,,predgrp]*dwmat*wmat
+predkernel[predgrp,,]*Neff[,,predgrp]*dwmat*wmat
+sweep(predkernel[predgrp,,],c(1),Neff[,,predgrp]*dwmat*wmat,"*")
+sweep(predkernel[predgrp,,],c(1,2),Neff[,,predgrp]*dwmat*wmat,"*")
+Neff[,,predgrp]*dwmat*wmat
+rowSums(Neff[,,predgrp]*dwmat*wmat,"*"))
+rowSums(Neff[,,predgrp]*dwmat*wmat)
+rowCols(Neff[,,predgrp]*dwmat*wmat)
+colSums(Neff[,,predgrp]*dwmat*wmat)
+predkernel[predgrp,,]%*%colSums(Neff[,,predgrp]*dwmat*wmat)
+phiprey <- predkernel[predgrp,,]%*%colSums(Neff[,,predgrp]*dwmat*wmat)
+SearchVol*phiprey
+SearchVol[predgrp,]
+plot(phiprey)
+plot(w,phiprey,log="x")
+encount <- SearchVol[predgrp,]*phiprey
+plot(w,phiprey,log="x")
+plot(w,encount,log="x")
+plot(w,encount,log="xy")
+plot(w,phiprey,log="xy")
+N[itime,predgrp,]
+sweep(model$predkernel,c(1,2),model$SearchVol*N[itime,predgrp,]*dwmat,"*")
+model$predkernel[predgrp,]
+predrate <- sweep(predkernel[predgrp,],c(1,2),model$SearchVol*N[itime,predgrp,]*dwmat,"*")
+predrate <- sweep(predkernel,c(1,2),model$SearchVol*N[itime,predgrp,]*dwmat,"*")
